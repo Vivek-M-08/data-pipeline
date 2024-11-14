@@ -6,6 +6,16 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def _id: String = readOrDefault[String]("_id", "")
 
-  def publishedAt: String = readOrDefault[String]("publishedAt", "")
+  def reportType: String = readOrDefault[String]("reportType", null)
+
+  def dashboardData: Map[String, String] = readOrDefault[Map[String, String]]("dashboardData", null)
+
+//  def projectAdmin: String = readOrDefault[String]("dashboardData.admin", null)
+//
+//  def targetedProgram: String = readOrDefault[String]("dashboardData.targetedProgram", null)
+//
+//  def targetedState: String = readOrDefault[String]("dashboardData.targetedState", null)
+//
+//  def targetedDistrict: String = readOrDefault[String]("dashboardData.targetedDistrict", null)
 
 }
