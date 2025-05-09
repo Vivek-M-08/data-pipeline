@@ -84,10 +84,17 @@ class ObservationStreamFunction(config: ObservationStreamConfig)(implicit val ma
     val statusTable = s""""${solution_id}_status""""
     val user_roles = event.userRoles
     var roles = ""
-    user_roles.foreach { role =>
-      roles = user_roles.map(role => role("label").toString).mkString(", ")
+    if (user_roles != null && user_roles.nonEmpty) {
+      roles = user_roles.flatMap { role =>
+        if (role != null && role.contains("label")) {
+          Some(role("label").toString)
+        } else {
+          None
+        }
+      }.mkString(", ")
+    } else {
+      roles = ""
     }
-    println(s"roles: $roles")
 
 
     /**

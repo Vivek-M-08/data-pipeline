@@ -46,7 +46,7 @@ class ObservationStreamConfig(override val config: Config) extends BaseJobConfig
   val pgUsername: String = config.getString("postgres.username")
   val pgPassword: String = config.getString("postgres.password")
   val pgDataBase: String = config.getString("postgres.database")
-  val solutions: String = config.getString("postgres.tables.solutionsTable")
+//  val solutions: String = config.getString("postgres.tables.solutionsTable")
   val dashboard_metadata: String = config.getString("postgres.tables.dashboardMetadataTable")
 
 //  val createSolutionsTable =
