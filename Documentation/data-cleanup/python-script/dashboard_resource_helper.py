@@ -1,18 +1,20 @@
 import requests
 import json
 import time
-import configparser
+import os
+from pyhocon import ConfigFactory
 import logging
 from logging.handlers import RotatingFileHandler
 logger = logging.getLogger("resource_delete_logger")
 
 def load_metabase_config():
-    config = configparser.ConfigParser()
-    config.read("config.ini")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    UNIFIED_CONF = os.environ.get("UNIFIED_PIPELINE_CONF", os.path.abspath(os.path.join(base_dir, "../../..", 'unified-common.conf')))
+    config = ConfigFactory.parse_file(UNIFIED_CONF)
 
-    url = config.get("Metabase", "url")
-    username = config.get("Metabase", "username")
-    password = config.get("Metabase", "password")
+    url = config.get_string("metabase.url")
+    username = config.get_string("metabase.username")
+    password = config.get_string("metabase.password")
 
     return url, username, password
 
