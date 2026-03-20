@@ -8,7 +8,7 @@ on:
         required: true
 
 env:
-  DOCKER_IMAGE_NAME: elevate-data # Configure your image name here
+  DOCKER_IMAGE_NAME: elevate-data # Configure your image name 
   DOCKER_REGISTRY: docker.io
   DOCKER_NAMESPACE: shikshalokamqa
 
