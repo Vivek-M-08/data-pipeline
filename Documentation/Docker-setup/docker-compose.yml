@@ -37,7 +37,6 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/
 
-
   # Flink Job Manager
   jobmanager:
     image: flink:1.13.2-scala_2.12-java11
@@ -72,38 +71,38 @@ services:
     volumes:
       - flink_shared:/opt/flink/usrlib/
 
-  # PostgreSQL
-  postgres:
-    image: postgres:latest
-    restart: always
-    container_name: postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - elevate_net
-
-  # pgAdmin
-  pgadmin:
-    image: dpage/pgadmin4
-    restart: always
-    container_name: pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-    ports:
-      - "5050:80"
-    depends_on:
-      - postgres
-    networks:
-      - elevate_net
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
+    # PostgreSQL
+    postgres:
+      image: postgres:latest
+      restart: always
+      container_name: postgres
+      environment:
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        POSTGRES_DB: ${POSTGRES_DB}
+      volumes:
+        - postgres_data:/var/lib/postgresql/data
+      ports:
+        - "5432:5432"
+      networks:
+        - elevate_net
+  
+    # pgAdmin
+    pgadmin:
+      image: dpage/pgadmin4
+      restart: always
+      container_name: pgadmin
+      environment:
+        PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+        PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      ports:
+        - "5050:80"
+      depends_on:
+        - postgres
+      networks:
+        - elevate_net
+      volumes:
+        - pgadmin_data:/var/lib/pgadmin
 
   # Metabase
   metabase:
@@ -135,33 +134,20 @@ services:
     image: shikshalokamqa/elevate-data:latest
     restart: always
     container_name: elevate-data
+    command: python3 /app/elevate-data-entrypoint.py
     ports:
       - "8080:8080"
     depends_on:
       - kafka
-      - postgres
+      # - postgres
       - jobmanager
       - taskmanager
-      - metabase
+      # - metabase
     networks:
       - elevate_net
     volumes:
-      - ./config_files/base-config.conf:/app/jobs-core/src/main/resources/base-config.conf
-      - ./config_files/application.conf:/app/metabase-jobs/users-via-csv/src/main/resources/application.conf
-      - ./config_files/metabase-observation-dashboard.conf:/app/metabase-jobs/observation-dashboard-creator/src/main/resources/metabase-observation-dashboard.conf
-      - ./config_files/metabase-project-dashboard.conf:/app/metabase-jobs/project-dashboard-creator/src/main/resources/metabase-project-dashboard.conf
-      - ./config_files/metabase-survey-dashboard.conf:/app/metabase-jobs/survey-dashboard-creator/src/main/resources/metabase-survey-dashboard.conf
-      - ./config_files/observation-stream.conf:/app/stream-jobs/observation-stream-processor/src/main/resources/observation-stream.conf
-      - ./config_files/project-stream.conf:/app/stream-jobs/project-stream-processor/src/main/resources/project-stream.conf
-      - ./config_files/survey-stream.conf:/app/stream-jobs/survey-stream-processor/src/main/resources/survey-stream.conf
-      - ./config_files/user-service.conf:/app/metabase-jobs/user-service/src/main/resources/user-service.conf
-      - ./config_files/user-stream.conf:/app/stream-jobs/user-stream-processor/src/main/resources/user-stream.conf
-      - ./config_files/metabase-user-dashboard.conf:/app/metabase-jobs/user-dashboard-creator/src/main/resources/metabase-user-dashboard.conf
-      - ./config_files/mentoring-stream.conf:/app/stream-jobs/mentoring-stream-processor/src/main/resources/mentoring-stream.conf
-      - ./config_files/metabase-mentoring-dashboard.conf:/app/metabase-jobs/mentoring-dashboard-creator/src/main/resources/metabase-mentoring-dashboard.conf
-      - ./config_files/config.ini:/app/Documentation/batch-scripts/config.ini
-      - ./logs:/app/logs
-    entrypoint: ["/bin/bash", "-c", "/app/Documentation/Docker-setup/submit-jobs.sh jobmanager && sleep infinity"]
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/unified-common.conf:/job-configs/unified-common.conf
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/logs:/logs
 # Networks
 networks:
   elevate_net:

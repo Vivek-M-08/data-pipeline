@@ -5,10 +5,12 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+import org.shikshalokam.job.BaseJobConfig
 import org.shikshalokam.job.connector.FlinkKafkaConnector
 import org.shikshalokam.job.user.dashboard.creator.domain.Event
 import org.shikshalokam.job.util.FlinkUtil
 import org.shikshalokam.job.user.dashboard.creator.functions.UserMetabaseDashboardFunction
+
 import java.io.File
 
 class MetabaseDashboardTask(config: UserMetabaseDashboardConfig, kafkaConnector: FlinkKafkaConnector) {
@@ -34,10 +36,7 @@ class MetabaseDashboardTask(config: UserMetabaseDashboardConfig, kafkaConnector:
 object MetabaseDashboardTask {
   def main(args: Array[String]): Unit = {
     println("Starting up the Metabase Dashboard creation Job")
-    val configFilePath = Option(ParameterTool.fromArgs(args).get("config.file.path"))
-    val config = configFilePath.map {
-      path => ConfigFactory.parseFile(new File(path)).resolve()
-    }.getOrElse(ConfigFactory.load("unified-common.conf").withFallback(ConfigFactory.systemEnvironment()))
+    val config = BaseJobConfig.loadConfig(args)
     val metabaseDashboardConfig = new UserMetabaseDashboardConfig(config)
     val kafkaUtil = new FlinkKafkaConnector(metabaseDashboardConfig)
     val task = new MetabaseDashboardTask(metabaseDashboardConfig, kafkaUtil)
