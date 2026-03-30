@@ -33,9 +33,10 @@ services:
     networks:
       - elevate_net
     logging:
-      driver: none
+        driver: none
     volumes:
       - kafka_data:/var/lib/kafka/
+
 
   # Flink Job Manager
   jobmanager:
@@ -71,38 +72,38 @@ services:
     volumes:
       - flink_shared:/opt/flink/usrlib/
 
-    # PostgreSQL
-    postgres:
-      image: postgres:latest
-      restart: always
-      container_name: postgres
-      environment:
-        POSTGRES_USER: ${POSTGRES_USER}
-        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-        POSTGRES_DB: ${POSTGRES_DB}
-      volumes:
-        - postgres_data:/var/lib/postgresql/data
-      ports:
-        - "5432:5432"
-      networks:
-        - elevate_net
+  # PostgreSQL
+  postgres:
+    image: postgres:latest
+    restart: always
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - elevate_net
 
-    # pgAdmin
-    pgadmin:
-      image: dpage/pgadmin4
-      restart: always
-      container_name: pgadmin
-      environment:
-        PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-        PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-      ports:
-        - "5050:80"
-      depends_on:
-        - postgres
-      networks:
-        - elevate_net
-      volumes:
-        - pgadmin_data:/var/lib/pgadmin
+  # pgAdmin
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: always
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - elevate_net
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
 
   # Metabase
   metabase:
