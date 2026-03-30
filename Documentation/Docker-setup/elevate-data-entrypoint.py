@@ -1,20 +1,18 @@
 import os
 import sys
-import json
 import time
 import base64
 import zipfile
 import subprocess
-import atexit
 import logging
-from logging.handlers import RotatingFileHandler
 import requests
 from pyhocon import ConfigFactory
+from logging.handlers import TimedRotatingFileHandler
 
 # ---------------------------------------------------
 # Configuration & Paths
 # ---------------------------------------------------
-UNIFIED_CONF = os.getenv("UNIFIED_PIPELINE_CONF", "/job-configs/unified-common.conf")
+UNIFIED_CONF = os.getenv("UNIFIED_PIPELINE_CONF", "/app/unified-common.conf")
 
 if not os.path.exists(UNIFIED_CONF):
     print(f"ERROR: Configuration file not found at {UNIFIED_CONF}")
@@ -22,77 +20,84 @@ if not os.path.exists(UNIFIED_CONF):
 
 conf = ConfigFactory.parse_file(UNIFIED_CONF)
 
-def resolve_path(path):
-    """Resolve /app paths to local paths if needed."""
-    if not path:
-        return path
-    if not os.path.exists(path) and path.startswith("/app/"):
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        local_path = path.replace("/app", base_dir)
-        if os.path.exists(local_path):
-            return local_path
-    return path
-
 # ---------------------------------------------------
 # Setup Logging
 # ---------------------------------------------------
 def setup_logging():
-    log_file = os.getenv("LOG_FILE_PATH") or conf.get("elevate-data.log-path", "/logs/elevate-data.log")
+    log_file = conf.get("elevate.data.entrypoint.log.path")
     log_dir = os.path.dirname(log_file)
-    
-    if log_dir and not os.path.exists(log_dir):
-        try:
+
+    try:
+        if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        except OSError:
-            log_file = "elevate-data.log"
+    except OSError:
+        log_file = "elevate-data.log"
+        log_dir = ""
 
-    logger = logging.getLogger()
+    logger = logging.getLogger("elevate-data-entrypoint")
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    logger.propagate = False
 
-    # Console Handler
+    if logger.handlers:
+        return logger, log_file
+
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    )
+
+    # Console
     ch = logging.StreamHandler()
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
-    # File Handler
+    # File (daily rotation)
     try:
-        fh = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        fh = TimedRotatingFileHandler(
+            log_file,
+            when="midnight",
+            interval=1,
+            backupCount=7,
+            encoding="utf-8"
+        )
+        fh.suffix = "%Y-%m-%d"
+
+        def namer(default_name):
+            base, date = default_name.rsplit(".", 1)
+            return f"{base}-{date}.log"
+
+        fh.namer = namer
         fh.setFormatter(formatter)
         logger.addHandler(fh)
+
     except Exception as e:
         print(f"Warning: Could not setup file logging: {e}")
 
-    return log_file
-
-LOG_FILE = setup_logging()
-logging.info("Starting Elevate entry point script...")
+    return logger, log_file
 
 # ---------------------------------------------------
 # Global Configuration
 # ---------------------------------------------------
-CHECK_INTERVAL_SEC = int(conf.get("health.check.interval.sec", 60))
-API_TIMEOUT_SEC = int(conf.get("health.check.api-timeout-sec", 30))
+CHECK_INTERVAL_SEC = int(conf.get("health.check.interval.sec"))
 FLINK_URL = conf.get("flink.url")
-JOB_JARS = dict(conf.get("health.check.job-jars", {}))
-JOB_CONF_PATHS = list(conf.get("health.check.job-conf", []))
+JOB_JARS = dict(conf.get("health.check.job-jars"))
 
 # Akka-service config
-AKKA_JAR = resolve_path(conf.get("health.check.akka-jar"))
-AKKA_HOST = conf.get("akka.http.host", "localhost")
-AKKA_PORT = int(conf.get("akka.http.port", 8080))
-AKKA_TOKEN = conf.get("akka.security.api.token", "")
+AKKA_JAR = conf.get("health.check.akka-jar")
+AKKA_HOST = conf.get("akka.http.host")
+AKKA_PORT = int(conf.get("akka.http.port"))
+AKKA_TOKEN = conf.get("akka.security.api.token")
 
 AKKA_HEALTH = f"http://{AKKA_HOST}:{AKKA_PORT}/health"
 FLINK_HEALTH_API = f"http://{AKKA_HOST}:{AKKA_PORT}/api/health/flink"
 
 # Data-cleanup config
-DATA_CLEANUP_ENABLED = conf.get("data.cleanup.enabled", False)
-CLEANUP_SCRIPT = resolve_path(conf.get("data.cleanup.script.path"))
+DATA_CLEANUP_ENABLED = conf.get("data.cleanup.enabled")
+CLEANUP_SCRIPT = conf.get("data.cleanup.script.path")
 
 # Mentoring-push config
-MENTORING_ENABLED = conf.get("mentoring.batch.job.enabled", False)
-MENTORING_SCRIPT = resolve_path(conf.get("mentoring.batch.job.script.path"))
+MENTORING_ENABLED = conf.get("mentoring.batch.job.enabled")
+MENTORING_SCRIPT = conf.get("mentoring.batch.job.script.path")
+MENTORING_CRON = conf.get("mentoring.batch.job.cron")
 
 # Shared HTTP Session
 session = requests.Session()
@@ -103,87 +108,145 @@ session.headers.update({"Authorization": AKKA_TOKEN})
 # ---------------------------------------------------
 _akka_proc = None
 
-def start_akka_service():
+def is_akka_running():
+    """Check if akka service is already running"""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", AKKA_JAR],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def start_akka_service(logger, log_file):
     global _akka_proc
-    if not AKKA_JAR or not os.path.exists(AKKA_JAR):
-        logging.error(f"Akka JAR not found: {AKKA_JAR}")
+
+    if is_akka_running():
+        logger.info("Akka service is already running. Skipping start.")
         return
 
-    logging.info(f"Starting akka-service from {AKKA_JAR}...")
-    log_dir = os.path.dirname(LOG_FILE)
-    akka_log_path = os.path.join(log_dir, "akka-service.log") if log_dir else "akka-service.log"
-    
+    if not AKKA_JAR or not os.path.exists(AKKA_JAR):
+        logger.error(f"Akka JAR not found: {AKKA_JAR}")
+        return
+
+    logger.info(f"Starting akka-service from {AKKA_JAR}...")
+
+    log_dir = os.path.dirname(log_file)
+    akka_log_path = os.path.join(log_dir, "elevate-data.log") if log_dir else "elevate-data.log"
+
+    try:
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        akka_log_path = "akka-service.log"
+
+    command = [
+        "java",
+        f"-Dconfig.file={UNIFIED_CONF}",
+        "-jar",
+        AKKA_JAR
+    ]
+
     try:
         akka_log_file = open(akka_log_path, "a")
-    except OSError:
-        akka_log_file = open("akka-service.log", "a")
 
-    _akka_proc = subprocess.Popen(
-        ["java", f"-Dconfig.file={UNIFIED_CONF}", "-jar", AKKA_JAR],
-        env={**os.environ, "UNIFIED_PIPELINE_CONF": UNIFIED_CONF},
-        stdout=akka_log_file,
-        stderr=subprocess.STDOUT,
-    )
-    logging.info(f"Akka service started (PID={_akka_proc.pid}). Logs at {akka_log_path}")
+        _akka_proc = subprocess.Popen(
+            command,
+            env={**os.environ, "UNIFIED_PIPELINE_CONF": UNIFIED_CONF},
+            stdout=akka_log_file,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setpgrp
+        )
 
-def wait_for_service(url, name, retries=30, delay=3, expected_status=200):
-    logging.info(f"Waiting for {name} to become ready at {url}...")
-    for attempt in range(1, retries + 1):
-        try:
-            r = session.get(url, timeout=10)
-            if r.status_code == expected_status:
-                logging.info(f"{name} is ready.")
-                return True
-        except Exception:
-            pass
-        
-        if name == "Akka" and _akka_proc and _akka_proc.poll() is not None:
-            logging.error("Akka service process exited unexpectedly.")
-            sys.exit(1)
+        logger.info(f"Akka service started (PID={_akka_proc.pid})")
+        logger.info(f"Akka logs: {akka_log_path}")
 
-        logging.info(f"{name} not ready yet, retrying ({attempt}/{retries})...")
-        time.sleep(delay)
-    
-    logging.error(f"{name} did not become ready in time.")
-    sys.exit(1)
-
-def stop_akka_service():
-    if _akka_proc and _akka_proc.poll() is None:
-        logging.info("Stopping akka-service...")
-        _akka_proc.terminate()
-        try:
-            _akka_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            _akka_proc.kill()
-        logging.info("Akka service stopped.")
-
-atexit.register(stop_akka_service)
+    except Exception as e:
+        logger.error(f"Failed to start akka service: {e}")
 
 # ---------------------------------------------------
 # Tmux Session Helpers
 # ---------------------------------------------------
+def _run_tmux(*args):
+    """Run a tmux command, reaping the child immediately to avoid zombies."""
+    proc = subprocess.Popen(
+        ["tmux"] + list(args),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=os.setsid
+    )
+    stdout, stderr = proc.communicate()
+    return proc.returncode
+
+
 def setup_tmux_session(session_name, script_path, enabled):
     if not enabled:
-        logging.info(f"{session_name} is disabled. Skipping.")
+        logger.info(f"{session_name} is disabled. Skipping.")
         return
 
     if not script_path or not os.path.exists(script_path):
-        logging.error(f"Script for {session_name} not found at {script_path}")
+        logger.error(f"Script for {session_name} not found at {script_path}")
         return
 
+    # Check tmux availability
     try:
-        subprocess.run(["tmux", "-V"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logging.error(f"tmux not found. {session_name} requires tmux.")
+        proc = subprocess.Popen(["tmux", "-V"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.communicate()
+        if proc.returncode != 0:
+            raise FileNotFoundError
+    except FileNotFoundError:
+        logger.error(f"tmux not found. {session_name} requires tmux.")
         return
 
-    res = subprocess.run(["tmux", "has-session", "-t", session_name], capture_output=True)
-    if res.returncode == 0:
-        logging.info(f"Restarting tmux session '{session_name}'...")
-        subprocess.run(["tmux", "kill-session", "-t", session_name])
+    # Check if session already exists
+    rc = _run_tmux("has-session", "-t", session_name)
+    if rc == 0:
+        logger.info(f"tmux session '{session_name}' already running. Skipping creation.")
+        return
 
-    logging.info(f"Starting {session_name} in tmux: {script_path}")
-    subprocess.run(["tmux", "new-session", "-d", "-s", session_name, f"python3 {script_path}"])
+    # Create new session only if not running
+    logger.info(f"Starting {session_name} in tmux: {script_path}")
+    _run_tmux("new-session", "-d", "-s", session_name, f"python3 {script_path}")
+
+# ---------------------------------------------------
+# Cron Setup
+# ---------------------------------------------------
+def setup_cron_job(script_path, cron_schedule, enabled):
+
+    if not enabled:
+        logger.info("Mentoring batch job is disabled. Skipping setup.")
+        return
+
+    if not script_path or not os.path.exists(script_path):
+        logger.error(f"Cron script not found at {script_path}")
+        return
+
+    # Check if crontab already has this script
+    try:
+        res = subprocess.run(["crontab", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # return code 1 usually means no crontab for user, which is fine
+        current_cron = res.stdout if res.returncode == 0 else ""
+        
+        if script_path in current_cron:
+            logger.info(f"Cron job for {script_path} is already setup. Skipping.")
+            return
+
+        # Setup cron job to run every 2 hours
+        cron_command = f"{cron_schedule} /bin/bash {script_path} >> /tmp/run-batch.log 2>&1\n"
+        new_cron = (current_cron + "\n" + cron_command).lstrip()
+        
+        process = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
+        process.communicate(new_cron)
+        
+        if process.returncode == 0:
+            logger.info(f"Successfully setup cron job for {script_path} with schedule '{cron_schedule}'.")
+        else:
+            logger.error(f"Failed to setup cron job for {script_path}.")
+    except Exception as e:
+        logger.error(f"Error setting up cron job: {e}")
 
 # ---------------------------------------------------
 # Flink Job Helpers
@@ -202,7 +265,7 @@ def get_entry_class_from_jar(jar_path):
                 if line.startswith("Main-Class:"):
                     return line.split(":", 1)[1].strip()
     except Exception as e:
-        logging.error(f"Failed reading manifest for {jar_path}: {e}")
+        logger.error(f"Failed reading manifest for {jar_path}: {e}")
     return None
 
 def upload_jar(jar_path):
@@ -211,71 +274,78 @@ def upload_jar(jar_path):
             r = session.post(f"{FLINK_URL}/jars/upload", files={"jarfile": f})
         if r.status_code == 200:
             return r.json().get("filename", "").split("/")[-1]
-        logging.error(f"Jar upload failed: {r.status_code} - {r.text}")
+        logger.error(f"Jar upload failed: {r.status_code} - {r.text}")
     except Exception as e:
-        logging.error(f"Error uploading jar {jar_path}: {e}")
+        logger.error(f"Error uploading jar {jar_path}: {e}")
     return None
 
 def submit_job(jar_path):
-    jar_path = resolve_path(jar_path)
     if not os.path.exists(jar_path):
-        logging.error(f"Jar file not found: {jar_path}")
+        logger.error(f"Jar file not found: {jar_path}")
         return
 
     entry_class = get_entry_class_from_jar(jar_path)
     if not entry_class:
-        logging.error(f"Could not detect entry class for {jar_path}")
+        logger.error(f"Could not detect entry class for {jar_path}")
         return
 
     jar_id = upload_jar(jar_path)
     if not jar_id: return
 
-    logging.info(f"Submitting job with Jar ID: {jar_id}, Class: {entry_class}")
+    try:
+        with open(UNIFIED_CONF, "rb") as f:
+            config_content = base64.b64encode(f.read()).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Failed to read configs for job submission: {e}")
+        return
+
+    logger.info(f"Submitting job with Jar ID: {jar_id}, Class: {entry_class}")
     payload = {
         "entryClass": entry_class,
-        "programArgs": "--config.file.path /job-configs/unified-common.conf"
+        "programArgs": f"--config.content {config_content}"
     }
     r = session.post(f"{FLINK_URL}/jars/{jar_id}/run", json=payload)
-    logging.info(f"Submit Response: {r.status_code} - {r.text}")
+    logger.info(f"Submit Response: {r.status_code} - {r.text}")
 
 def check_job_running(job_name):
     try:
-        r = session.get(FLINK_HEALTH_API, timeout=API_TIMEOUT_SEC)
+        r = session.get(FLINK_HEALTH_API)
         if r.status_code != 200:
             return None
         jobs = r.json().get("jobs", [])
         return any(job.get("name") == job_name and job.get("status") == "RUNNING" for job in jobs)
     except Exception as e:
-        logging.error(f"Error checking status for '{job_name}': {e}")
+        logger.error(f"Error checking status for '{job_name}': {e}")
         return None
-
+    
 # ---------------------------------------------------
 # Main Loop
 # ---------------------------------------------------
-def monitor_jobs():
+def monitor_jobs(logger, log_file):
+    start_akka_service(logger, log_file)
+    setup_tmux_session("resource_cleanup", CLEANUP_SCRIPT, DATA_CLEANUP_ENABLED)
+    setup_cron_job(MENTORING_SCRIPT, MENTORING_CRON, MENTORING_ENABLED)
+
     while True:
-        logging.info("Polling Flink jobs status...")
+        logger.info("Checking Flink jobs status...")
         for name, jar in JOB_JARS.items():
             is_running = check_job_running(name)
             if is_running is True:
-                logging.info(f"Job '{name}' is RUNNING.")
+                logger.info(f"Job '{name}' is RUNNING.")
             elif is_running is False:
-                logging.info(f"Job '{name}' not running. Submitting...")
+                logger.info(f"Job '{name}' not running. Submitting...")
                 submit_job(jar)
             else:
-                logging.warning(f"Status of '{name}' unknown. Skipping resubmission.")
-        
-        logging.info(f"Sleeping {CHECK_INTERVAL_SEC}s...")
+                logger.warning(f"Status of '{name}' unknown. Skipping resubmission.")
+
+        logger.info(f"Sleeping {CHECK_INTERVAL_SEC}s...")
         time.sleep(CHECK_INTERVAL_SEC)
 
+
 if __name__ == "__main__":
-    start_akka_service()
-    wait_for_service(AKKA_HEALTH, "Akka")
-    
-    if FLINK_URL:
-        wait_for_service(f"{FLINK_URL}/overview", "Flink")
-    
-    setup_tmux_session("resource_cleanup", CLEANUP_SCRIPT, DATA_CLEANUP_ENABLED)
-    setup_tmux_session("mentoring_batch_job", MENTORING_SCRIPT, MENTORING_ENABLED)
-    
-    monitor_jobs()
+    logger, log_file = setup_logging()
+
+    logger.info("Starting Elevate entry point script...")
+
+    monitor_jobs(logger, log_file)
+

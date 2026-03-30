@@ -12,6 +12,7 @@ RUN apt update && apt install -y \
     git \
     curl \
     unzip \
+    tmux \
     maven \
     tmux \
     jq \

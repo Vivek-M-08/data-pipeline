@@ -33,7 +33,7 @@ services:
     networks:
       - elevate_net
     logging:
-        driver: none
+      driver: none
     volumes:
       - kafka_data:/var/lib/kafka/
 
@@ -86,7 +86,7 @@ services:
         - "5432:5432"
       networks:
         - elevate_net
-  
+
     # pgAdmin
     pgadmin:
       image: dpage/pgadmin4
@@ -123,31 +123,26 @@ services:
       - postgres
     networks:
       - elevate_net
-    volumes:
-      - metabase_data:/dev/random:ro
-      - ./update_metabase_schema.sh:/app/update_metabase_schema.sh
-    user: root
-    entrypoint: ["/bin/bash", "/app/update_metabase_schema.sh"]
 
   # Elevate Data Service
   elevate-data:
     image: shikshalokamqa/elevate-data:latest
     restart: always
     container_name: elevate-data
-    command: python3 /app/elevate-data-entrypoint.py
+    command: python3 /app/Documentation/Docker-setup/elevate-data-entrypoint.py
     ports:
       - "8080:8080"
     depends_on:
       - kafka
-      # - postgres
+      - postgres
       - jobmanager
       - taskmanager
-      # - metabase
+      - metabase
     networks:
       - elevate_net
     volumes:
-      - /home/user2/vivek-elevate-data/viveks-data-pipeline/unified-common.conf:/job-configs/unified-common.conf
-      - /home/user2/vivek-elevate-data/viveks-data-pipeline/logs:/logs
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/unified-common.conf:/app/unified-common.conf
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/logs:/app/logs
 # Networks
 networks:
   elevate_net:
