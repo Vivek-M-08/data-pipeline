@@ -5,6 +5,7 @@ import base64
 import zipfile
 import subprocess
 import logging
+import xml.etree.ElementTree as ET
 import requests
 from pyhocon import ConfigFactory
 from logging.handlers import TimedRotatingFileHandler
@@ -24,26 +25,16 @@ conf = ConfigFactory.parse_file(UNIFIED_CONF)
 # Setup Logging
 # ---------------------------------------------------
 def setup_logging():
-    log_file = conf.get("elevate.data.entrypoint.log.path")
-    log_dir = os.path.dirname(log_file)
-
-    try:
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-    except OSError:
-        log_file = "elevate-data.log"
-        log_dir = ""
+    log_file_path = conf.get("elevate.data.entrypoint.log.path")
 
     logger = logging.getLogger("elevate-data-entrypoint")
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
     if logger.handlers:
-        return logger, log_file
+        return logger, log_file_path
 
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-    )
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 
     # Console
     ch = logging.StreamHandler()
@@ -52,13 +43,7 @@ def setup_logging():
 
     # File (daily rotation)
     try:
-        fh = TimedRotatingFileHandler(
-            log_file,
-            when="midnight",
-            interval=1,
-            backupCount=7,
-            encoding="utf-8"
-        )
+        fh = TimedRotatingFileHandler(log_file_path, when="midnight", interval=1, backupCount=7, encoding="utf-8")
         fh.suffix = "%Y-%m-%d"
 
         def namer(default_name):
@@ -72,17 +57,17 @@ def setup_logging():
     except Exception as e:
         print(f"Warning: Could not setup file logging: {e}")
 
-    return logger, log_file
+    return logger, log_file_path
 
 # ---------------------------------------------------
 # Global Configuration
 # ---------------------------------------------------
 CHECK_INTERVAL_SEC = int(conf.get("health.check.interval.sec"))
 FLINK_URL = conf.get("flink.url")
-JOB_JARS = dict(conf.get("health.check.job-jars"))
+JOB_JARS = dict(conf.get("health.check.flink.job.jars"))
 
 # Akka-service config
-AKKA_JAR = conf.get("health.check.akka-jar")
+AKKA_JAR = conf.get("akka.service.jar")
 AKKA_HOST = conf.get("akka.http.host")
 AKKA_PORT = int(conf.get("akka.http.port"))
 AKKA_TOKEN = conf.get("akka.security.api.token")
@@ -97,7 +82,7 @@ CLEANUP_SCRIPT = conf.get("data.cleanup.script.path")
 # Mentoring-push config
 MENTORING_ENABLED = conf.get("mentoring.batch.job.enabled")
 MENTORING_SCRIPT = conf.get("mentoring.batch.job.script.path")
-MENTORING_CRON = conf.get("mentoring.batch.job.cron")
+MENTORING_CRON_TIME = conf.get("mentoring.batch.job.cron.time")
 
 # Shared HTTP Session
 session = requests.Session()
@@ -106,26 +91,22 @@ session.headers.update({"Authorization": AKKA_TOKEN})
 # ---------------------------------------------------
 # Akka Service
 # ---------------------------------------------------
-_akka_proc = None
+akka_proc = None
 
 def is_akka_running():
-    """Check if akka service is already running"""
+    """Check if akka service is healthy via its /health endpoint."""
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", AKKA_JAR],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        return result.returncode == 0
+        r = requests.get(AKKA_HEALTH, timeout=5)
+        return r.status_code == 200 and r.json().get("status") == "UP"
     except Exception:
         return False
 
 
-def start_akka_service(logger, log_file):
-    global _akka_proc
+def start_akka_service():
+    global akka_proc
 
     if is_akka_running():
-        logger.info("Akka service is already running. Skipping start.")
+        logger.info("Akka service is already running. Skipping....")
         return
 
     if not AKKA_JAR or not os.path.exists(AKKA_JAR):
@@ -134,34 +115,16 @@ def start_akka_service(logger, log_file):
 
     logger.info(f"Starting akka-service from {AKKA_JAR}...")
 
-    log_dir = os.path.dirname(log_file)
-    akka_log_path = os.path.join(log_dir, "elevate-data.log") if log_dir else "elevate-data.log"
+    akka_log_path = conf.get("akka.service.log.path")
 
-    try:
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-    except OSError:
-        akka_log_path = "akka-service.log"
-
-    command = [
-        "java",
-        f"-Dconfig.file={UNIFIED_CONF}",
-        "-jar",
-        AKKA_JAR
-    ]
+    command = ["java", f"-Dconfig.file={UNIFIED_CONF}", "-jar", AKKA_JAR]
 
     try:
         akka_log_file = open(akka_log_path, "a")
 
-        _akka_proc = subprocess.Popen(
-            command,
-            env={**os.environ, "UNIFIED_PIPELINE_CONF": UNIFIED_CONF},
-            stdout=akka_log_file,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setpgrp
-        )
+        akka_proc = subprocess.Popen(command, stdout=akka_log_file, stderr=subprocess.STDOUT, preexec_fn=os.setpgrp)
 
-        logger.info(f"Akka service started (PID={_akka_proc.pid})")
+        logger.info(f"Akka service started (PID={akka_proc.pid})")
         logger.info(f"Akka logs: {akka_log_path}")
 
     except Exception as e:
@@ -170,14 +133,8 @@ def start_akka_service(logger, log_file):
 # ---------------------------------------------------
 # Tmux Session Helpers
 # ---------------------------------------------------
-def _run_tmux(*args):
-    """Run a tmux command, reaping the child immediately to avoid zombies."""
-    proc = subprocess.Popen(
-        ["tmux"] + list(args),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        preexec_fn=os.setsid
-    )
+def run_tmux(*args):
+    proc = subprocess.Popen(["tmux"] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
     stdout, stderr = proc.communicate()
     return proc.returncode
 
@@ -202,14 +159,14 @@ def setup_tmux_session(session_name, script_path, enabled):
         return
 
     # Check if session already exists
-    rc = _run_tmux("has-session", "-t", session_name)
+    rc = run_tmux("has-session", "-t", session_name)
     if rc == 0:
         logger.info(f"tmux session '{session_name}' already running. Skipping creation.")
         return
 
     # Create new session only if not running
     logger.info(f"Starting {session_name} in tmux: {script_path}")
-    _run_tmux("new-session", "-d", "-s", session_name, f"python3 {script_path}")
+    run_tmux("new-session", "-d", "-s", session_name, f"python3 {script_path}")
 
 # ---------------------------------------------------
 # Cron Setup
@@ -251,29 +208,64 @@ def setup_cron_job(script_path, cron_schedule, enabled):
 # ---------------------------------------------------
 # Flink Job Helpers
 # ---------------------------------------------------
-def get_entry_class_from_jar(jar_path):
+
+def get_entry_class_from_pom(jar_path):
+    """Derive the pom.xml path from the jar path and extract <mainClass>.
+
+    Given a jar at: /app/stream-jobs/<module>/target/<artifact>.jar
+    The pom.xml is at: /app/stream-jobs/<module>/pom.xml
+    """
     try:
-        with zipfile.ZipFile(jar_path) as jar:
-            manifest = jar.read("META-INF/MANIFEST.MF").decode()
-            lines = []
-            for line in manifest.splitlines():
-                if line.startswith(" "):
-                    if lines: lines[-1] += line[1:]
-                elif line.strip():
-                    lines.append(line)
-            for line in lines:
-                if line.startswith("Main-Class:"):
-                    return line.split(":", 1)[1].strip()
+        # jar is inside <module>/target/; go up two levels to reach <module>/
+        module_dir = os.path.dirname(os.path.dirname(jar_path))
+        pom_path = os.path.join(module_dir, "pom.xml")
+
+        if not os.path.exists(pom_path):
+            logger.warning(f"pom.xml not found at {pom_path}")
+            return None
+
+        tree = ET.parse(pom_path)
+        root = tree.getroot()
+
+        ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+        ns_prefix = f"{{{ns}}}" if ns else ""
+
+        main_class = root.find(f".//{ns_prefix}mainClass")
+        if main_class is not None and main_class.text:
+            logger.info(f"Found mainClass in {pom_path}: {main_class.text.strip()}")
+            return main_class.text.strip()
+
+        logger.warning(f"<mainClass> not found in {pom_path}")
     except Exception as e:
-        logger.error(f"Failed reading manifest for {jar_path}: {e}")
+        logger.error(f"Failed reading pom.xml for {jar_path}: {e}")
     return None
 
-def upload_jar(jar_path):
+def check_and_upload_jar(jar_path):
+    """If jar is already uploaded on Flink, return the jar_id. Otherwise, upload the jar and return the jar_id."""
+    jar_filename = os.path.basename(jar_path)
+
+    # Check if the jar is already uploaded on Flink
+    try:
+        r = session.get(f"{FLINK_URL}/jars")
+        if r.status_code == 200:
+            for jar in r.json().get("files", []):
+                # Flink stores jars as "<uuid>_<original-filename>"
+                uploaded_name = jar.get("name", "")
+                if uploaded_name.endswith(jar_filename):
+                    jar_id = jar.get("id", "").split("/")[-1]
+                    logger.info(f"Jar already uploaded: {uploaded_name} (id={jar_id}). Skipping upload.")
+                    return jar_id
+    except Exception as e:
+        logger.warning(f"Could not check existing jars on Flink: {e}")
+
+    # Not found — upload the jar
     try:
         with open(jar_path, "rb") as f:
             r = session.post(f"{FLINK_URL}/jars/upload", files={"jarfile": f})
         if r.status_code == 200:
-            return r.json().get("filename", "").split("/")[-1]
+            jar_id = r.json().get("filename", "").split("/")[-1]
+            logger.info(f"Jar uploaded successfully: {jar_filename} (id={jar_id})")
+            return jar_id
         logger.error(f"Jar upload failed: {r.status_code} - {r.text}")
     except Exception as e:
         logger.error(f"Error uploading jar {jar_path}: {e}")
@@ -284,12 +276,13 @@ def submit_job(jar_path):
         logger.error(f"Jar file not found: {jar_path}")
         return
 
-    entry_class = get_entry_class_from_jar(jar_path)
+    entry_class = get_entry_class_from_pom(jar_path)
     if not entry_class:
         logger.error(f"Could not detect entry class for {jar_path}")
         return
 
-    jar_id = upload_jar(jar_path)
+    jar_id = check_and_upload_jar(jar_path)
+
     if not jar_id: return
 
     try:
@@ -300,10 +293,7 @@ def submit_job(jar_path):
         return
 
     logger.info(f"Submitting job with Jar ID: {jar_id}, Class: {entry_class}")
-    payload = {
-        "entryClass": entry_class,
-        "programArgs": f"--config.content {config_content}"
-    }
+    payload = {"entryClass": entry_class, "programArgs": f"--config.content {config_content}"}
     r = session.post(f"{FLINK_URL}/jars/{jar_id}/run", json=payload)
     logger.info(f"Submit Response: {r.status_code} - {r.text}")
 
@@ -325,9 +315,9 @@ def monitor_jobs(logger, log_file):
     while True:
         logger.info("Checking Flink jobs status...")
 
-        start_akka_service(logger, log_file)
+        start_akka_service()
         setup_tmux_session("resource_cleanup", CLEANUP_SCRIPT, DATA_CLEANUP_ENABLED)
-        setup_cron_job(MENTORING_SCRIPT, MENTORING_CRON, MENTORING_ENABLED)
+        setup_cron_job(MENTORING_SCRIPT, MENTORING_CRON_TIME, MENTORING_ENABLED)
         
         for name, jar in JOB_JARS.items():
             is_running = check_job_running(name)
@@ -339,14 +329,14 @@ def monitor_jobs(logger, log_file):
             else:
                 logger.warning(f"Status of '{name}' unknown. Skipping resubmission.")
 
-        logger.info(f"Sleeping {CHECK_INTERVAL_SEC}s...")
+        logger.info(f"Sleeping {CHECK_INTERVAL_SEC}s...\n")
         time.sleep(CHECK_INTERVAL_SEC)
 
 
 if __name__ == "__main__":
     logger, log_file = setup_logging()
 
-    logger.info("Starting Elevate entry point script...")
+    logger.info(f"Starting Elevate entry point script...")
 
     monitor_jobs(logger, log_file)
 

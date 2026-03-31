@@ -32,7 +32,7 @@ mb = MetabaseUtil(url, user, pwd)
 
 LOG_FILE_PATH = config.get_string('data.cleanup.log.path', '/tmp')
 os.makedirs(LOG_FILE_PATH, exist_ok=True)
-LOG_FILE = os.path.join(LOG_FILE_PATH, "resource_delete.log")
+LOG_FILE = os.path.join(LOG_FILE_PATH, "resource-delete.log")
 
 logger = logging.getLogger("resource_delete_logger")
 logger.setLevel(logging.INFO)
