@@ -322,12 +322,13 @@ def check_job_running(job_name):
 # Main Loop
 # ---------------------------------------------------
 def monitor_jobs(logger, log_file):
-    start_akka_service(logger, log_file)
-    setup_tmux_session("resource_cleanup", CLEANUP_SCRIPT, DATA_CLEANUP_ENABLED)
-    setup_cron_job(MENTORING_SCRIPT, MENTORING_CRON, MENTORING_ENABLED)
-
     while True:
         logger.info("Checking Flink jobs status...")
+
+        start_akka_service(logger, log_file)
+        setup_tmux_session("resource_cleanup", CLEANUP_SCRIPT, DATA_CLEANUP_ENABLED)
+        setup_cron_job(MENTORING_SCRIPT, MENTORING_CRON, MENTORING_ENABLED)
+        
         for name, jar in JOB_JARS.items():
             is_running = check_job_running(name)
             if is_running is True:
