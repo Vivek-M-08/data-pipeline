@@ -63,4 +63,3 @@ object Routes {
     MessageDigest.isEqual(a.getBytes("UTF-8"), b.getBytes("UTF-8"))
   }
 }
-

@@ -11,7 +11,10 @@ RUN apt update && apt install -y \
     tar \
     git \
     curl \
+    unzip \
+    cron \
     maven \
+    tmux \
     jq \
     nano \
     postgresql postgresql-client \
@@ -62,7 +65,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN pip install --no-cache-dir -r /app/Documentation/batch-scripts/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 RUN mvn clean install -DskipTests
 

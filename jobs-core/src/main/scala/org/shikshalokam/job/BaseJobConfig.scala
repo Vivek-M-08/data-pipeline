@@ -1,13 +1,14 @@
 package org.shikshalokam.job
 
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
+import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerConfig
 
-import java.io.Serializable
-import java.util.Properties
+import java.io.{File, Serializable}
+import java.util.{Base64, Properties}
 
 class BaseJobConfig(val config: Config, val jobName: String) extends Serializable {
 
@@ -63,5 +64,21 @@ class BaseJobConfig(val config: Config, val jobName: String) extends Serializabl
 
   def getBoolean(key: String, default: Boolean): Boolean = {
     if (config.hasPath(key)) config.getBoolean(key) else default
+  }
+}
+
+object BaseJobConfig {
+  def loadConfig(args: Array[String]): Config = {
+    val parameters = ParameterTool.fromArgs(args)
+    if (parameters.has("config.content")) {
+      val encodedConfig = parameters.get("config.content")
+      val configContent = new String(Base64.getDecoder.decode(encodedConfig))
+      ConfigFactory.parseString(configContent).resolve()
+    } else if (parameters.has("config.file.path")) {
+      val configFilePath = parameters.get("config.file.path")
+      ConfigFactory.parseFile(new File(configFilePath)).resolve()
+    } else {
+      ConfigFactory.load("unified-common.conf").withFallback(ConfigFactory.systemEnvironment())
+    }
   }
 }

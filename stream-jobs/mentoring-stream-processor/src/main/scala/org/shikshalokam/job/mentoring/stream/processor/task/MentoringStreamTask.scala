@@ -5,6 +5,7 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+import org.shikshalokam.job.BaseJobConfig
 import org.shikshalokam.job.connector.FlinkKafkaConnector
 import org.shikshalokam.job.mentoring.stream.processor.domain.Event
 import org.shikshalokam.job.mentoring.stream.processor.functions.MentoringStreamFunction
@@ -42,12 +43,7 @@ class MentoringStreamTask(config: MentoringStreamConfig, kafkaConnector: FlinkKa
 object MentoringStreamTask {
   def main(args: Array[String]): Unit = {
     println("Starting up the Mentoring Stream Job")
-    val parameterTool = ParameterTool.fromArgs(args)
-    val configFilePath = Option(parameterTool.get("config.file.path"))
-    val baseConfig = configFilePath
-      .map(path => ConfigFactory.parseFile(new File(path)))
-      .getOrElse(ConfigFactory.load("unified-common.conf"))
-    val config = ConfigFactory.systemEnvironment().withFallback(baseConfig).resolve()
+    val config = BaseJobConfig.loadConfig(args)
     val mentoringStreamConfig = new MentoringStreamConfig(config)
     val kafkaUtil = new FlinkKafkaConnector(mentoringStreamConfig)
     val task = new MentoringStreamTask(mentoringStreamConfig, kafkaUtil)

@@ -124,17 +124,13 @@ services:
       - postgres
     networks:
       - elevate_net
-    volumes:
-      - metabase_data:/dev/random:ro
-      - ./update_metabase_schema.sh:/app/update_metabase_schema.sh
-    user: root
-    entrypoint: ["/bin/bash", "/app/update_metabase_schema.sh"]
 
   # Elevate Data Service
   elevate-data:
     image: shikshalokamqa/elevate-data:latest
     restart: always
     container_name: elevate-data
+    command: python3 /app/Documentation/Docker-setup/elevate-data-entrypoint.py
     ports:
       - "8080:8080"
     depends_on:
@@ -146,22 +142,8 @@ services:
     networks:
       - elevate_net
     volumes:
-      - ./config_files/base-config.conf:/app/jobs-core/src/main/resources/base-config.conf
-      - ./config_files/application.conf:/app/metabase-jobs/users-via-csv/src/main/resources/application.conf
-      - ./config_files/metabase-observation-dashboard.conf:/app/metabase-jobs/observation-dashboard-creator/src/main/resources/metabase-observation-dashboard.conf
-      - ./config_files/metabase-project-dashboard.conf:/app/metabase-jobs/project-dashboard-creator/src/main/resources/metabase-project-dashboard.conf
-      - ./config_files/metabase-survey-dashboard.conf:/app/metabase-jobs/survey-dashboard-creator/src/main/resources/metabase-survey-dashboard.conf
-      - ./config_files/observation-stream.conf:/app/stream-jobs/observation-stream-processor/src/main/resources/observation-stream.conf
-      - ./config_files/project-stream.conf:/app/stream-jobs/project-stream-processor/src/main/resources/project-stream.conf
-      - ./config_files/survey-stream.conf:/app/stream-jobs/survey-stream-processor/src/main/resources/survey-stream.conf
-      - ./config_files/user-service.conf:/app/metabase-jobs/user-service/src/main/resources/user-service.conf
-      - ./config_files/user-stream.conf:/app/stream-jobs/user-stream-processor/src/main/resources/user-stream.conf
-      - ./config_files/metabase-user-dashboard.conf:/app/metabase-jobs/user-dashboard-creator/src/main/resources/metabase-user-dashboard.conf
-      - ./config_files/mentoring-stream.conf:/app/stream-jobs/mentoring-stream-processor/src/main/resources/mentoring-stream.conf
-      - ./config_files/metabase-mentoring-dashboard.conf:/app/metabase-jobs/mentoring-dashboard-creator/src/main/resources/metabase-mentoring-dashboard.conf
-      - ./config_files/config.ini:/app/Documentation/batch-scripts/config.ini
-      - ./logs:/app/logs
-    entrypoint: ["/bin/bash", "-c", "/app/Documentation/Docker-setup/submit-jobs.sh jobmanager && sleep infinity"]
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/unified-common.conf:/app/unified-common.conf
+      - /home/user2/vivek-elevate-data/viveks-data-pipeline/logs:/app/logs
 # Networks
 networks:
   elevate_net:

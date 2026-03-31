@@ -7,31 +7,43 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import json as pyjson
 from datetime import  timezone
-import configparser
+from pyhocon import ConfigFactory
 
 
 # Load config.ini
 base_dir = os.path.dirname(os.path.abspath(__file__))
-config_path = os.path.join(base_dir, "config.ini")
-
-config = configparser.ConfigParser()
-config.read("config.ini")
+UNIFIED_CONF = os.environ.get("UNIFIED_PIPELINE_CONF", os.path.abspath(os.path.join(base_dir, "../..", 'unified-common.conf')))
+config = ConfigFactory.parse_file(UNIFIED_CONF)
 
 # --- DB Configs ---
-MENTORING = dict(config["SOURCE_DB1"])
-USERS = dict(config["SOURCE_DB2"])
+MENTORING = {
+    "dbname": config.get_string("mentoring.source.db1.dbname"),
+    "user": config.get_string("postgres.username"),
+    "password": config.get_string("postgres.password"),
+    "host": config.get_string("postgres.host"),
+    "port": config.get_int("postgres.port", 5432)
+}
+
+USERS = {
+    "dbname": config.get_string("mentoring.source.db2.dbname"),
+    "user": config.get_string("postgres.username"),
+    "password": config.get_string("postgres.password"),
+    "host": config.get_string("postgres.host"),
+    "port": config.get_int("postgres.port", 5432)
+}
+
 
 # --- Kafka Config ---
-KAFKA_BROKER = config["KAFKA"]["broker"]
-TOPIC = config["KAFKA"]["topic"]
+KAFKA_BROKER = config.get_string('kafka.broker.servers', 'host')
+TOPIC = config.get_string('kafka.mentoring.batch.job.topic', 'topic')
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
     value_serializer=lambda v: pyjson.dumps(v, default=str).encode("utf-8"),
-    acks=config["KAFKA"].get("acks", "all"),
-    linger_ms=int(config["KAFKA"].get("linger_ms", 50)),
-    batch_size=int(config["KAFKA"].get("batch_size", 64000)),
-    retries=int(config["KAFKA"].get("retries", 5)),
+    acks=config.get_string('kafka.mentoring.batch.job.acks', 'all'),
+    linger_ms=config.get_int('kafka.mentoring.batch.job.linger_ms', 50),
+    batch_size=config.get_int('kafka.mentoring.batch.job.batch_size', 64000),
+    retries=config.get_int('kafka.mentoring.batch.job.retries', 5),
 )
 
 def push_event(event: dict):
@@ -45,8 +57,8 @@ def push_event(event: dict):
         raise
 
 # ---------------- Logging Setup ----------------
-LOG_DIR = config["LOGGING"].get("log_dir", "logs")  # fallback to "logs" if missing
-RETENTION_DAYS = int(config["LOGGING"].get("retention_days", 7))
+LOG_DIR = config.get_string('mentoring.batch.job.log_dir', 'logs')  # fallback to "logs" if missing
+RETENTION_DAYS = config.get_int('mentoring.batch.job.retention_days', 7)
 
 os.makedirs(LOG_DIR, exist_ok=True)
 

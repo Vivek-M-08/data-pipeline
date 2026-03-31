@@ -5,6 +5,7 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+import org.shikshalokam.job.BaseJobConfig
 import org.shikshalokam.job.connector.FlinkKafkaConnector
 import org.shikshalokam.job.user.stream.processor.domain.Event
 import org.shikshalokam.job.user.stream.processor.functions.UserStreamFunction
@@ -48,10 +49,7 @@ class UserStreamTask(config: UserStreamConfig, kafkaConnector: FlinkKafkaConnect
 object UserStreamTask {
   def main(args: Array[String]): Unit = {
     println("Starting up the User Stream Job")
-    val configFilePath = Option(ParameterTool.fromArgs(args).get("config.file.path"))
-    val config = configFilePath.map {
-      path => ConfigFactory.parseFile(new File(path)).resolve()
-    }.getOrElse(ConfigFactory.load("unified-common.conf").withFallback(ConfigFactory.systemEnvironment()))
+    val config = BaseJobConfig.loadConfig(args)
     val userStreamConfig = new UserStreamConfig(config)
     val kafkaUtil = new FlinkKafkaConnector(userStreamConfig)
     val task = new UserStreamTask(userStreamConfig, kafkaUtil)
